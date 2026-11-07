@@ -2,11 +2,7 @@ import base64
 import json
 import re
 import os
-from dotenv import load_dotenv
 from zhipuai import ZhipuAI
-
-# 加载环境变量
-load_dotenv()
 
 class AIService:
     """AI服务类，封装所有AI调用逻辑"""
@@ -18,7 +14,7 @@ class AIService:
         self.model_text = os.getenv("ZHIPU_MODEL_TEXT", "glm-4-flash")
         
         if not self.api_key:
-            raise ValueError("未找到ZHIPU_API_KEY环境变量，请在.env文件中配置")
+            raise ValueError("未找到 ZHIPU_API_KEY 环境变量，请在青龙环境变量中配置")
         
         self.client = ZhipuAI(api_key=self.api_key)
     

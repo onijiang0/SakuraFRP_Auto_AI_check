@@ -1,3 +1,41 @@
+# 青龙与独立容器（实验性）
+
+本方案将 Playwright 和智谱依赖放在独立容器，青龙只负责定时触发。容器方案尚需在目标环境中构建并实际验证；不要在未验证前启用定时任务。
+
+## 青龙环境变量
+
+- `SAKURAFRP_USERNAME`、`SAKURAFRP_PASSWORD`：樱花穿透网站登录账号和密码。
+- `ZHIPU_API_KEY`：智谱 API Key。
+- `SAKURA_RUNNER_TOKEN`：自己生成的随机密钥，必须与独立容器中的同名变量一致。
+- `SAKURA_RUNNER_URL`：共用青龙网络命名空间时为 `http://127.0.0.1:8765/run`。
+- `ZHIPU_MODEL_VISION`、`ZHIPU_MODEL_TEXT`：可选模型配置。
+
+青龙调用脚本为 `ql_runner.py`。容器使用 `SAKURAFRP_DATA_DIR=/data` 保存按账号隔离的登录状态；应使用专用持久化命名卷，确保目录由容器用户拥有且权限为 0700。
+
+## 独立容器
+
+仓库的 `Dockerfile` 可构建隔离镜像。以下为同机 Docker 的配置示例：
+
+```yaml
+services:
+  sakurafrp:
+    build: .
+    network_mode: "container:qinglong"
+    environment:
+      SAKURA_RUNNER_TOKEN: ${SAKURA_RUNNER_TOKEN:?请设置随机密钥}
+    volumes:
+      - sakurafrp_data:/data
+    restart: unless-stopped
+volumes:
+  sakurafrp_data:
+```
+
+先核对青龙容器名、不是 host 网络且 8765 未被占用；不要发布容器端口。服务仅监听 127.0.0.1，凭据通过共用网络命名空间中的本地连接传递，具有同一命名空间访问权限的进程仍可能访问该服务。重建青龙容器后需重建或重新接入此容器。不要把真实密钥写入仓库或公开日志。
+
+环境准备好后，在青龙创建命令 `task wxapp/ql_runner.py`，先手动运行并核对日志，再开启定时。运行环境及验证码服务可能发生变化；本地单元测试通过并不代表实际签到成功。
+
+---
+
 # SakuraFRP 青龙适配（待实机验证）
 
 基于 RyanStarFox/SakuraFRP_Auto_AI_check 的 main 分支源码改造；保留上游 Apache-2.0 LICENSE。原项目已包含青龙运行说明，本适配改用青龙环境变量、隔离账号缓存，并阻止失败时返回成功状态。

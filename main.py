@@ -1,5 +1,9 @@
 import sys
 import hashlib
+import json
+import stat
+import tempfile
+from contextlib import contextmanager
 import os
 import io
 import time
@@ -31,6 +35,102 @@ target_url = f"https://{domain}/user/"
 def account_state_file(base_dir, username):
     digest = hashlib.sha256(username.encode("utf-8")).hexdigest()
     return base_dir / f"state_{digest}.json"
+
+def check_private_file(fd):
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("缓存或锁文件不是普通文件")
+    if os.name != "nt" and (info.st_uid != os.geteuid() or info.st_mode & 0o077):
+        raise ValueError("缓存或锁文件的所有者或权限不安全")
+
+def open_private_file(path, flags, mode=0o600):
+    if path.is_symlink():
+        raise ValueError("缓存或锁文件不能是符号链接")
+    fd = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0), mode)
+    try:
+        check_private_file(fd)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+def decode_cached_state(data):
+    try:
+        state = json.loads(data)
+        if not isinstance(state, dict) or not isinstance(state.get("cookies"), list) or not isinstance(state.get("origins"), list):
+            raise ValueError("invalid state")
+        return state, True
+    except (ValueError, TypeError):
+        return None, False
+
+def read_cached_state(path):
+    try:
+        fd = open_private_file(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except FileNotFoundError:
+        return None, True
+    with os.fdopen(fd, "r", encoding="utf-8") as stream:
+        try:
+            result = decode_cached_state(stream.read())
+        except UnicodeDecodeError:
+            result = (None, False)
+    if not result[1]:
+        print("[WARNING] 登录缓存损坏，将保留原文件并重新登录；本次不写入缓存")
+    return result
+
+def new_context_with_cache(browser, cached_state, may_write_state):
+    try:
+        return browser.new_context(storage_state=cached_state), may_write_state
+    except Exception:
+        if cached_state is None:
+            raise
+        print("[WARNING] 浏览器拒绝登录缓存，将保留原文件并重新登录；本次不写入缓存")
+        return browser.new_context(), False
+
+def write_cached_state(path, state):
+    # 既有文件必须再次通过权限检查；绝不覆盖异常文件。
+    try:
+        old_fd = open_private_file(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except FileNotFoundError:
+        pass
+    else:
+        os.close(old_fd)
+    fd, temporary = tempfile.mkstemp(prefix=".state-", suffix=".tmp", dir=path.parent)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump(state, stream, ensure_ascii=False)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+@contextmanager
+def account_lock(path):
+    lock_path = path.with_suffix(".lock")
+    fd = open_private_file(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NONBLOCK", 0))
+    try:
+        if os.name == "nt":
+            import msvcrt
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise RuntimeError("该账号已有签到任务在运行") from exc
+        else:
+            import fcntl
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError("该账号已有签到任务在运行") from exc
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 def save_debug_image(path, data, enabled):
     if enabled:
@@ -1008,9 +1108,14 @@ def main():
     try:
         BASE_DIR = runtime_dir()
         os.umask(0o077)
+        if BASE_DIR.is_symlink():
+            raise ValueError("SAKURAFRP_DATA_DIR 不能是符号链接")
         BASE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if os.name != "nt" and BASE_DIR.stat().st_mode & 0o077:
-            raise ValueError("SAKURAFRP_DATA_DIR 必须仅允许目录所有者访问（chmod 700）")
+        data_info = BASE_DIR.lstat()
+        if not stat.S_ISDIR(data_info.st_mode):
+            raise ValueError("SAKURAFRP_DATA_DIR 必须是目录")
+        if os.name != "nt" and (data_info.st_uid != os.geteuid() or data_info.st_mode & 0o077):
+            raise ValueError("SAKURAFRP_DATA_DIR 必须由当前用户拥有且仅允许其访问（chmod 700）")
         STATE_FILE = None
         SUCCESS_SCREENSHOT = BASE_DIR / "checkin.png"
     except (OSError, ValueError) as e:
@@ -1045,7 +1150,8 @@ def main():
             logger.log_error(error_msg)
         raise SystemExit(1)
 
-    with sync_playwright() as p:
+    with account_lock(STATE_FILE), sync_playwright() as p:
+        cached_state, may_write_state = read_cached_state(STATE_FILE)
         # 从环境变量读取代理配置（可选）
         proxy_url = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
         
@@ -1060,7 +1166,7 @@ def main():
             )
         else:
             browser = p.chromium.launch(headless=True, slow_mo=100)
-        context = browser.new_context(storage_state=STATE_FILE if STATE_FILE.exists() else None)
+        context, may_write_state = new_context_with_cache(browser, cached_state, may_write_state)
         page = context.new_page()
         page.set_viewport_size({"width": 1280, "height": 900})
         
@@ -1116,7 +1222,8 @@ def main():
                 
                 try:
                     page.wait_for_selector("text=账号信息", timeout=10000)
-                    context.storage_state(path=STATE_FILE)
+                    if may_write_state:
+                        write_cached_state(STATE_FILE, context.storage_state())
                     is_logged_in = True
                     print("[SUCCESS] 登录成功")
                     if logger:
