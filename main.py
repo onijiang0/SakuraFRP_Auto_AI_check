@@ -1,4 +1,5 @@
 import sys
+import hashlib
 import os
 import io
 import time
@@ -19,13 +20,34 @@ if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
 
 # ========= 配置 =========
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = None
+ACCOUNT_FILE = None
+STATE_FILE = None
+SUCCESS_SCREENSHOT = None
+DEBUG_SCREENSHOTS = False
 domain = "www.natfrp.com"
 target_url = f"https://{domain}/user/"
 
-ACCOUNT_FILE = BASE_DIR / "account.txt"  
-STATE_FILE = BASE_DIR / "state.json"     
-SUCCESS_SCREENSHOT = BASE_DIR / "checkin.png"
+def account_state_file(base_dir, username):
+    digest = hashlib.sha256(username.encode("utf-8")).hexdigest()
+    return base_dir / f"state_{digest}.json"
+
+def save_debug_image(path, data, enabled):
+    if enabled:
+        path.write_bytes(data)
+
+def save_debug_page(page, path, enabled):
+    if enabled:
+        page.screenshot(path=str(path))
+
+def resolve_sign_success(page, sign_success, find_signed):
+    return bool(sign_success or find_signed(page))
+
+def runtime_dir():
+    configured = os.getenv("SAKURAFRP_DATA_DIR", "").strip()
+    if not configured or not Path(configured).is_absolute():
+        raise ValueError("SAKURAFRP_DATA_DIR 必须配置为私密数据目录的绝对路径")
+    return Path(configured)
 
 ALREADY_SIGNED_TEXT = "今天已经签到过啦"       
 SIGNED_ANCESTOR_LEVELS = 3                
@@ -37,11 +59,11 @@ def load_file_content(path: Path):
     return path.read_text(encoding="utf-8").strip()
 
 def load_username_password(path: Path):
-    content = load_file_content(path)
-    lines = [l.strip() for l in content.splitlines() if l.strip()]
-    if len(lines) < 2:
-        raise ValueError("account.txt 格式错误：需两行分别存放用户名和密码")
-    return lines[0], lines[1]
+    username = os.getenv("SAKURAFRP_USERNAME", "").strip()
+    password = os.getenv("SAKURAFRP_PASSWORD", "")
+    if not username or not password:
+        raise ValueError("请配置 SAKURAFRP_USERNAME 和 SAKURAFRP_PASSWORD 环境变量")
+    return username, password
 
 def clean_old_logs(base_dir: Path, days: int = 30):
     """清理指定天数前的日志文件"""
@@ -613,11 +635,10 @@ def solve_geetest_slider(page, ai_service, logger=None):
             print("[DEBUG] 成功获取背景图")
             # 保存背景图到文件
             bg_img_path = BASE_DIR / "captcha_bg.png"
-            with open(bg_img_path, "wb") as f:
-                f.write(bg_img_bytes)
-            print(f"[DEBUG] 背景图已保存到: {bg_img_path}")
+            save_debug_image(bg_img_path, bg_img_bytes, DEBUG_SCREENSHOTS)
+            pass
             if logger:
-                logger.log_captcha_step("步骤1", f"成功获取背景图，已保存到: {bg_img_path}")
+                pass
         except Exception as e:
             print(f"[ERROR] 获取背景图失败: {e}")
             if logger:
@@ -629,11 +650,10 @@ def solve_geetest_slider(page, ai_service, logger=None):
             print("[DEBUG] 成功获取缺口图")
             # 保存缺口图到文件
             slice_img_path = BASE_DIR / "captcha_slice.png"
-            with open(slice_img_path, "wb") as f:
-                f.write(slice_img_bytes)
-            print(f"[DEBUG] 缺口图已保存到: {slice_img_path}")
+            save_debug_image(slice_img_path, slice_img_bytes, DEBUG_SCREENSHOTS)
+            pass
             if logger:
-                logger.log_captcha_step("步骤1", f"成功获取缺口图，已保存到: {slice_img_path}")
+                pass
         except Exception as e:
             print(f"[ERROR] 获取缺口图失败: {e}")
             if logger:
@@ -654,9 +674,8 @@ def solve_geetest_slider(page, ai_service, logger=None):
                     print(f"[DEBUG] 从img标签获取背景图: {selector}")
                     # 保存从img标签获取的背景图
                     bg_img_path = BASE_DIR / "captcha_bg.png"
-                    with open(bg_img_path, "wb") as f:
-                        f.write(bg_img_bytes)
-                    print(f"[DEBUG] 背景图已保存到: {bg_img_path}")
+                    save_debug_image(bg_img_path, bg_img_bytes, DEBUG_SCREENSHOTS)
+                    pass
                     break
             except:
                 continue
@@ -673,11 +692,10 @@ def solve_geetest_slider(page, ai_service, logger=None):
                 print("[DEBUG] 成功截图验证码容器")
                 # 保存整个验证码区域截图
                 container_img_path = BASE_DIR / "captcha_container.png"
-                with open(container_img_path, "wb") as f:
-                    f.write(bg_img_bytes)
-                print(f"[DEBUG] 验证码容器截图已保存到: {container_img_path}")
+                save_debug_image(container_img_path, bg_img_bytes, DEBUG_SCREENSHOTS)
+                pass
                 if logger:
-                    logger.log_captcha_step("步骤1", f"验证码容器截图已保存到: {container_img_path}")
+                    pass
         except Exception as e:
             print(f"[ERROR] 截图验证码容器失败: {e}")
             if logger:
@@ -717,11 +735,10 @@ def solve_geetest_slider(page, ai_service, logger=None):
         captcha_popup = page.locator(".geetest_popup, .geetest_wrap").first
         if captcha_popup.is_visible(timeout=1000):
             full_captcha_bytes = captcha_popup.screenshot()
-            with open(full_captcha_path, "wb") as f:
-                f.write(full_captcha_bytes)
-            print(f"[DEBUG] 完整验证码区域已保存到: {full_captcha_path}")
+            save_debug_image(full_captcha_path, full_captcha_bytes, DEBUG_SCREENSHOTS)
+            pass
             if logger:
-                logger.log_debug(f"完整验证码区域已保存到: {full_captcha_path}")
+                pass
     except Exception as e:
         print(f"[DEBUG] 保存完整验证码区域失败（非关键错误）: {e}")
     
@@ -844,10 +861,10 @@ def solve_geetest_slider(page, ai_service, logger=None):
     # ===== 拖动前截图 =====
     try:
         before_drag_path = BASE_DIR / "slider_before_drag.png"
-        page.screenshot(path=str(before_drag_path))
-        print(f"[INFO] 拖动前截图已保存: {before_drag_path}")
+        save_debug_page(page, before_drag_path, DEBUG_SCREENSHOTS)
+        pass
         if logger:
-            logger.log_debug(f"拖动前截图已保存: {before_drag_path}")
+            pass
     except Exception as e:
         print(f"[WARNING] 保存拖动前截图失败: {e}")
     
@@ -921,10 +938,10 @@ def solve_geetest_slider(page, ai_service, logger=None):
         # ===== 拖动后截图 =====
         try:
             after_drag_path = BASE_DIR / "slider_after_drag.png"
-            page.screenshot(path=str(after_drag_path))
-            print(f"[INFO] 拖动后截图已保存: {after_drag_path}")
+            save_debug_page(page, after_drag_path, DEBUG_SCREENSHOTS)
+            pass
             if logger:
-                logger.log_debug(f"拖动后截图已保存: {after_drag_path}")
+                pass
         except Exception as e:
             print(f"[WARNING] 保存拖动后截图失败: {e}")
         
@@ -987,10 +1004,21 @@ def main():
         save_screenshot = True
         save_log = True
     
-    # 清理30天前的旧日志
-    clean_old_logs(BASE_DIR, days=30)
+    global BASE_DIR, STATE_FILE, SUCCESS_SCREENSHOT, DEBUG_SCREENSHOTS
+    try:
+        BASE_DIR = runtime_dir()
+        os.umask(0o077)
+        BASE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name != "nt" and BASE_DIR.stat().st_mode & 0o077:
+            raise ValueError("SAKURAFRP_DATA_DIR 必须仅允许目录所有者访问（chmod 700）")
+        STATE_FILE = None
+        SUCCESS_SCREENSHOT = BASE_DIR / "checkin.png"
+    except (OSError, ValueError) as e:
+        print(f"[ERROR] 私密数据目录不可用: {e}")
+        raise SystemExit(1)
     
     # 初始化日志记录器（如果需要）
+    DEBUG_SCREENSHOTS = save_screenshot
     logger = None
     if save_log:
         logger = CheckinLogger(BASE_DIR)
@@ -1004,26 +1032,27 @@ def main():
         print(f"[ERROR] {error_msg}")
         if logger:
             logger.log_error(error_msg)
-        return
+        raise SystemExit(1)
     
     # 加载账号信息
     try:
         username, password = load_username_password(ACCOUNT_FILE)
+        STATE_FILE = account_state_file(BASE_DIR, username)
     except Exception as e:
         error_msg = f"加载账号信息失败: {e}"
         print(f"[ERROR] {error_msg}")
         if logger:
             logger.log_error(error_msg)
-        return
+        raise SystemExit(1)
 
     with sync_playwright() as p:
         # 从环境变量读取代理配置（可选）
         proxy_url = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
         
         if proxy_url:
-            print(f"[INFO] 使用代理: {proxy_url}")
+            print("[INFO] 使用代理")
             if logger:
-                logger.log_info(f"使用代理: {proxy_url}")
+                logger.log_info("使用代理")
             browser = p.chromium.launch(
                 headless=True, 
                 slow_mo=100,
@@ -1051,7 +1080,7 @@ def main():
             if logger:
                 logger.log_exception(type(e).__name__, str(e), traceback.format_exc())
             browser.close()
-            return
+            raise SystemExit(1)
 
         # 登录判断
         current_url_after_load = page.url
@@ -1111,6 +1140,10 @@ def main():
             if logger:
                 logger.log_login_status(True)
 
+        if not is_logged_in:
+            browser.close()
+            raise SystemExit(1)
+
         # 18岁弹窗
         try:
             btn_18 = page.get_by_text("是，我已满18岁")
@@ -1159,6 +1192,7 @@ def main():
                 # 初始化签到成功标志
                 sign_success = False
                 
+                captcha_appeared = False
                 try:
                     sign_btn.click()
                     print("[DEBUG] 已点击签到按钮，等待验证码加载...")
@@ -1168,8 +1202,8 @@ def main():
                     # 保存点击前的页面状态（用于对比）
                     try:
                         before_screenshot = BASE_DIR / "before_click.png"
-                        page.screenshot(path=str(before_screenshot))
-                        print(f"[DEBUG] 点击前页面截图已保存: {before_screenshot}")
+                        save_debug_page(page, before_screenshot, DEBUG_SCREENSHOTS)
+                        pass
                     except:
                         pass
                     
@@ -1231,8 +1265,8 @@ def main():
                     # 保存点击后的页面状态
                     try:
                         after_screenshot = BASE_DIR / "after_click.png"
-                        page.screenshot(path=str(after_screenshot))
-                        print(f"[DEBUG] 点击后页面截图已保存: {after_screenshot}")
+                        save_debug_page(page, after_screenshot, DEBUG_SCREENSHOTS)
+                        pass
                     except:
                         pass
                     
@@ -1327,6 +1361,10 @@ def main():
                             else:
                                 time.sleep(1)
                     
+                    if not sign_success and resolve_sign_success(page, sign_success, find_signed_text_locator):
+                        sign_success = True
+                        if logger:
+                            logger.log_sign_success()
                     if not sign_success:
                         final_url = page.url
                         error_msg = f"签到失败：超时或验证码处理失败（已尝试 {max_attempts} 次）"
@@ -1376,6 +1414,9 @@ def main():
                     print(f"[INFO] 截图已保存: {SUCCESS_SCREENSHOT}")
         
         print("[INFO] 脚本运行结束。")
+        if not find_signed_text_locator(page, timeout=1000):
+            browser.close()
+            raise SystemExit(1)
         browser.close()
 
 if __name__ == "__main__":

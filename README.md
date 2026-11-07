@@ -1,3 +1,37 @@
+# SakuraFRP 青龙适配（待实机验证）
+
+基于 RyanStarFox/SakuraFRP_Auto_AI_check 的 main 分支源码改造；保留上游 Apache-2.0 LICENSE。原项目已包含青龙运行说明，本适配改用青龙环境变量、隔离账号缓存，并阻止失败时返回成功状态。
+
+## 青龙环境变量
+
+- `SAKURAFRP_USERNAME`：樱花 FRP 登录账号。
+- `SAKURAFRP_PASSWORD`：该账号的登录密码。
+- `ZHIPU_API_KEY`：智谱 API 密钥。
+- `SAKURAFRP_DATA_DIR`：专用于该任务的私密数据目录，必须为绝对路径；Linux 目录权限须为 700，运行账号须可写。
+- `ZHIPU_MODEL_VISION`、`ZHIPU_MODEL_TEXT`：可选，沿用上游默认模型。
+
+不要把真实账号、密码、API 密钥或登录状态提交到 Git。状态文件按账号名哈希分别存储；其内容包含登录态，仍属于敏感文件。日志和启用截图时的页面图片也可能包含敏感信息，目录应保持私密。
+
+## 运行方式
+
+将 `main.py`、`ai_service.py`、`logger.py` 和 `requirements.txt` 保持在同一目录，安装上游 Python 依赖和 Playwright Chromium 浏览器，并按青龙镜像的系统环境满足浏览器所需系统库。Chromium 是否能安装和运行取决于青龙所在容器与架构，当前尚未验证。
+
+定时任务命令示例（将路径替换为实际路径）：
+
+```sh
+cd /ql/data/scripts/你的仓库目录 && python3 main.py --log-only
+```
+
+`--log-only` 关闭截图落盘；验证码图片仍会在内存中处理。原项目的默认模式和 `--both` 允许将调试截图保存到私密数据目录。脚本不再自动删除旧日志，保留与清理由用户自行决定。
+
+依赖示例：`python3 -m pip install -r requirements.txt`，以及 `python3 -m playwright install chromium`。是否允许在目标容器安装软件由使用者决定。
+
+## 当前验证范围
+
+仅完成账号环境变量、缓存文件分离、私密目录配置、失败分支和截图写入开关的部分离线检查，以及语法检查；没有实际登录、签到、验证验证码、安装浏览器或操作青龙面板。上游登录、页面与验证码实现可能随服务变化而失效；不能将本次离线检查当成实机签到成功。
+> 以下保留上游原版说明，其中账号文件、state.json、默认调试截图等内容描述的是上游版本；本 fork 的配置方式以上方说明为准。
+
+---
 # SAKURA FRP 自动签到脚本
 
 > 自动访问 `https://www.natfrp.com/user/` ，使用智谱AI + 专业验证码识别库完成每日签到；支持在本地直接运行，也支持在 **QingLong（青龙）** 定时任务中运行，以及Linux系统定时执行。
