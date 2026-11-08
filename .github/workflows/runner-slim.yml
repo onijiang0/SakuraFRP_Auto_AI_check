@@ -28,7 +28,7 @@ jobs:
           tags: sakura-test:local
       - name: Check image size and headless browser
         run: |
-          test "$(docker image inspect --format '{{.Size}}' sakura-test:local)" -lt 1200000000
+          test "$(docker save sakura-test:local | gzip -1 | wc -c)" -lt 800000000
           docker run --rm --entrypoint python sakura-test:local -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True); b.close(); p.stop()'
       - uses: docker/login-action@v3
         with:
