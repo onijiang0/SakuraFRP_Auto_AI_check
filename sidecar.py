@@ -1,15 +1,37 @@
 """Private HTTP runner for a single SakuraFRP check-in."""
+import base64
 import hmac
 import json
 import os
 import signal
+import ssl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import subprocess
 import sys
 import threading
+import tempfile
 
 RUN_LOCK = threading.Lock()
 MAX_REQUEST = 16384
+
+
+def create_tls_context():
+    cert = os.environ.get("SAKURA_RUNNER_TLS_CERT_B64", "")
+    key = os.environ.get("SAKURA_RUNNER_TLS_KEY_B64", "")
+    if not cert or not key:
+        raise ValueError("TLS certificate and private key are required")
+    cert_bytes = base64.b64decode(cert, validate=True)
+    key_bytes = base64.b64decode(key, validate=True)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    with tempfile.TemporaryDirectory(dir=os.environ["SAKURAFRP_DATA_DIR"]) as directory:
+        cert_path, key_path = os.path.join(directory, "cert.pem"), os.path.join(directory, "key.pem")
+        for path, value in ((cert_path, cert_bytes), (key_path, key_bytes)):
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as file:
+                file.write(value)
+        context.load_cert_chain(cert_path, key_path)
+    return context
 
 
 def terminate_process(process):
@@ -80,11 +102,13 @@ class Handler(BaseHTTPRequestHandler):
             RUN_LOCK.release()
 
 
-def make_server(address=("127.0.0.1", 8765)):
+def make_server(address=("0.0.0.0", 8765)):
     return ThreadingHTTPServer(address, Handler)
 
 
 if __name__ == "__main__":
     if not os.environ.get("SAKURA_RUNNER_TOKEN") or not os.environ.get("SAKURAFRP_DATA_DIR"):
         raise SystemExit("SAKURA_RUNNER_TOKEN and SAKURAFRP_DATA_DIR are required")
-    make_server().serve_forever()
+    server = make_server()
+    server.socket = create_tls_context().wrap_socket(server.socket, server_side=True)
+    server.serve_forever()

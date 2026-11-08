@@ -35,6 +35,15 @@ class SidecarTests(unittest.TestCase):
             self.assertEqual(status, 401)
             run.assert_not_called()
 
+    def test_default_server_listens_on_container_network(self):
+        with mock.patch("sidecar.ThreadingHTTPServer") as server:
+            sidecar.make_server()
+            self.assertEqual(server.call_args.args[0], ("0.0.0.0", 8765))
+
+    def test_server_rejects_missing_tls_material(self):
+        with self.assertRaises(ValueError):
+            sidecar.create_tls_context()
+
     def test_run_passes_private_values_only_as_environment(self):
         process = mock.Mock(returncode=0)
         process.communicate.return_value = ("checked", None)

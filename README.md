@@ -1,38 +1,46 @@
 # 青龙与独立容器（实验性）
 
-本方案将 Playwright 和智谱依赖放在独立容器，青龙只负责定时触发。容器方案尚需在目标环境中构建并实际验证；不要在未验证前启用定时任务。
+本方案让青龙负责定时，由独立容器运行 Playwright。方案需先构建并手动验证，再启用定时任务。
 
 ## 青龙环境变量
 
-- `SAKURAFRP_USERNAME`、`SAKURAFRP_PASSWORD`：樱花穿透网站登录账号和密码。
+- `SAKURAFRP_USERNAME`、`SAKURAFRP_PASSWORD`：樱花穿透网站账号和密码。
 - `ZHIPU_API_KEY`：智谱 API Key。
-- `SAKURA_RUNNER_TOKEN`：自己生成的随机密钥，必须与独立容器中的同名变量一致。
-- `SAKURA_RUNNER_URL`：共用青龙网络命名空间时为 `http://127.0.0.1:8765/run`。
+- `SAKURA_RUNNER_URL`：例如 `https://sakurafrp-runner:8765/run`，域名必须与证书匹配。
+- `SAKURA_RUNNER_TOKEN`：单独生成的随机密钥，需与容器内变量相同。
+- `SAKURA_RUNNER_CA_B64`：签发 runner 服务的 PEM 证书，使用不换行的 Base64 编码。
 - `ZHIPU_MODEL_VISION`、`ZHIPU_MODEL_TEXT`：可选模型配置。
 
-青龙调用脚本为 `ql_runner.py`。容器使用 `SAKURAFRP_DATA_DIR=/data` 保存按账号隔离的登录状态；应使用专用持久化命名卷，确保目录由容器用户拥有且权限为 0700。
+青龙调用脚本为 `ql_runner.py`。容器使用 `SAKURAFRP_DATA_DIR=/data` 保存按账号隔离的登录状态；使用专用持久化命名卷，确保目录属于容器用户且权限为 0700。
 
-## 独立容器
+## 隔离容器和专用网络
 
-仓库的 `Dockerfile` 可构建隔离镜像。以下为同机 Docker 的配置示例：
+建立专用 Docker bridge 网络，并将青龙容器额外接入该网络；保持现有青龙网络连接。容器服务不发布端口，仅允许需要的容器加入专用网络。应使用域名为 `sakurafrp-runner` 的证书，私钥仅配置给签到容器。以下为配置示例：
 
 ```yaml
 services:
-  sakurafrp:
+  sakurafrp-runner:
     build: .
-    network_mode: "container:qinglong"
     environment:
-      SAKURA_RUNNER_TOKEN: ${SAKURA_RUNNER_TOKEN:?请设置随机密钥}
+      SAKURA_RUNNER_TOKEN: ${SAKURA_RUNNER_TOKEN:?需要随机密钥}
+      SAKURA_RUNNER_TLS_CERT_B64: ${SAKURA_RUNNER_TLS_CERT_B64:?需要证书}
+      SAKURA_RUNNER_TLS_KEY_B64: ${SAKURA_RUNNER_TLS_KEY_B64:?需要私钥}
+    networks:
+      - sakura
     volumes:
       - sakurafrp_data:/data
     restart: unless-stopped
 volumes:
   sakurafrp_data:
+networks:
+  sakura:
+    external: true
+    name: sakurafrp-network
 ```
 
-先核对青龙容器名、不是 host 网络且 8765 未被占用；不要发布容器端口。服务仅监听 127.0.0.1，凭据通过共用网络命名空间中的本地连接传递，具有同一命名空间访问权限的进程仍可能访问该服务。重建青龙容器后需重建或重新接入此容器。不要把真实密钥写入仓库或公开日志。
+青龙与签到容器以 HTTPS 通信并验证服务端证书，拒绝明文 HTTP 和重定向。不要把真实密码、Key、私钥或随机密钥写进仓库；运行日志也可能包含敏感信息。青龙容器重建后需重新接入专用网络。
 
-环境准备好后，在青龙创建命令 `task wxapp/ql_runner.py`，先手动运行并核对日志，再开启定时。运行环境及验证码服务可能发生变化；本地单元测试通过并不代表实际签到成功。
+环境准备好后，在青龙执行 `task wxapp/ql_runner.py`，先手动运行并核对日志，再开启定时。环境及验证码服务可能变化，本地单元测试通过并不等于实际签到成功。
 
 ---
 

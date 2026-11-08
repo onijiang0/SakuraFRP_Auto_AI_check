@@ -14,14 +14,20 @@ class RunnerTests(unittest.TestCase):
             opener.assert_not_called()
 
     def test_reports_remote_failure(self):
-        env = {"SAKURA_RUNNER_URL": "http://runner:8765/run", "SAKURA_RUNNER_TOKEN": "token", "SAKURAFRP_USERNAME": "alice", "SAKURAFRP_PASSWORD": "password", "ZHIPU_API_KEY": "key"}
+        env = {"SAKURA_RUNNER_URL": "https://sakurafrp-runner:8765/run", "SAKURA_RUNNER_TOKEN": "token", "SAKURA_RUNNER_CA_B64": "ZmFrZS1jZXJ0", "SAKURAFRP_USERNAME": "alice", "SAKURAFRP_PASSWORD": "password", "ZHIPU_API_KEY": "key"}
         response = mock.MagicMock()
         response.__enter__.return_value.read.return_value = json.dumps({"exit_code": 1, "output": "not signed"}).encode()
         opener = mock.Mock()
         opener.open.return_value = response
-        with mock.patch.dict(os.environ, env, clear=True), mock.patch("ql_runner.urllib.request.build_opener", return_value=opener), mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch("ql_runner.ssl.create_default_context"), mock.patch("ql_runner.urllib.request.build_opener", return_value=opener), mock.patch("sys.stdout", new_callable=io.StringIO) as output:
             self.assertEqual(ql_runner.main(), 1)
             self.assertIn("not signed", output.getvalue())
+
+    def test_plaintext_http_is_rejected_without_sending_credentials(self):
+        env = {"SAKURA_RUNNER_URL": "http://sakurafrp-runner:8765/run", "SAKURA_RUNNER_TOKEN": "token", "SAKURA_RUNNER_CA_B64": "ZmFrZS1jZXJ0", "SAKURAFRP_USERNAME": "alice", "SAKURAFRP_PASSWORD": "password", "ZHIPU_API_KEY": "key"}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch("ql_runner.urllib.request.build_opener") as opener:
+            self.assertEqual(ql_runner.main(), 1)
+            opener.assert_not_called()
 
 
 if __name__ == "__main__":
